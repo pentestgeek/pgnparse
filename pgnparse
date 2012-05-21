@@ -1,0 +1,97 @@
+#!/usr/bin/env ruby
+APP_ROOT = File.dirname(__FILE__)
+$:.unshift( File.join(APP_ROOT, 'lib'))
+require 'ruby-nessus'
+require 'optparse'
+require 'scanhost'
+require 'finding'
+require 'msfinding'
+
+unless ARGV.length > 0
+	puts "Try running with -h"
+	exit!
+end
+
+FINDINGS = Array.new
+CREATEDFINDINGS = Array.new
+SCANHOSTS = Array.new
+SCANHOSTNAMES = Array.new
+MSIGNORE = Array.new
+
+
+options = {}
+args = OptionParser.new do |opts|
+	opts.banner = "Pgnparse 1.2Dev ( http://www.pentestgeek.com )\r\n"
+	opts.banner += "Usage: pgnparse [options]\r\n\r\n"
+	opts.banner += "\texample: pgnparse -g nessus_report.nessus -i 192.168.1.00 -s medium\r\n\r\n"
+
+	opts.on("-r", "--nessus [FILE]", "Nessus report to parse") {|file| options[:nessusscan] = file}
+	opts.on("-g", "--get-hosts [FILE]", "Generate a list of hosts and their Operating System") {|hosts| options[:hosts] = hosts}
+	opts.on("-s", "--severity [risk]", "Severity to check for, Only use with -i option") {|severity| options[:severity] = severity}
+	opts.on("-i", "--ip-address [IP Address]", "Generate sumarry report of specific hostname\r\n") {|hostname| options[:hostname] = hostname}
+	opts.on("-p", "--plugin-id [Nessu PluginID]", "Generate summary report for specific plugin\r\n") {|plugin| options[:pluginid] = plugin}
+	opts.on("-m", "--microsoft [FILE]", "Parse a Nessus scan for MS Findings\r\n\r\n") {|microsoft| options[:microsoft] = microsoft}	
+end
+args.parse!(ARGV)
+
+
+#### Need to Fix this Copde Star
+def parse_scan_for_report(file)
+	Nessus::Parse.new(file) do |scan|
+		scan.each_host do |host|
+			SCANHOSTS.push(Scanhost.new(host)) unless Scanhost.hostexists(host.dns_name)
+			host.each_event do |event|
+				if event.name.to_s =~ /MS\d{2}\-\d{3}/
+					MSIGNORE << event
+				elsif event.plugin_id == 11936
+					os = get_os(event, host)
+					Scanhost.add_os(host.dns_name, os, SCANHOSTS)
+					add_finding(event, host)
+				else	
+					add_finding(event, host)
+				end
+			end
+		end
+	end
+end
+ 
+
+# Main control method of application
+def controler(args)
+  check_severity(args)
+	if args[:hosts]
+		parse_scan_for_report(args[:hosts])
+		match_hosts_to_findings(args[:hosts], args)
+		Scanhost.display_all_hosts(SCANHOSTS, args)
+	elsif args[:nessusscan]
+		parse_scan_for_report(args[:nessusscan])
+		match_hosts_to_findings(args[:nessusscan], args)
+		if args[:hostname]
+			generate_host_summary(SCANHOSTS, args)
+			exit!
+		end
+		if args[:pluginid]
+			get_plugin_info(args[:pluginid])
+			exit!
+		end
+		if !args[:hostname] && !args[:pluginid] && !args[:microsoft]
+			Finding.display_all_findings(FINDINGS, args)
+		end
+	elsif args[:microsoft]
+		parse_scan_for_report(args[:microsoft])
+		match_hosts_to_findings(args[:microsoft], args)
+		parse_ms_findings(SCANHOSTS)
+	end
+end
+
+
+def check_severity(args)
+  allowed = ["HIGH", "MEDIUM", "LOW"]
+  if args[:severity] && !allowed.include?(args[:severity].to_s.upcase)
+    puts "Error, please only specify 'high', 'medium', or 'low' with -s optoin"
+    exit!
+  end
+  return  
+end
+
+controler(options)
